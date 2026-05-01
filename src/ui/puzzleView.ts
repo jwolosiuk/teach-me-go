@@ -1,10 +1,15 @@
 import { applyMove, type GameState } from '../engine/rules';
 import type { Color, Point } from '../engine/types';
-import { chooseBotMove, findPreset, PUZZLE_REFUTER_PRESET_ID } from '../game/bot';
+import {
+  chooseBotMove,
+  DEFAULT_TIME_MS,
+  findPreset,
+  PUZZLE_REFUTER_PRESET_ID,
+} from '../game/bot';
 import { ALL_PUZZLES } from '../puzzles/data/index';
 import { startSession, type RunnerSession } from '../puzzles/runner';
 import { CATEGORY_LABELS, CATEGORY_TIER, type Puzzle } from '../puzzles/types';
-import { isSolved, markSolved, solvedIds } from '../storage/progress';
+import { getBotTimeMs, isSolved, markSolved, solvedIds } from '../storage/progress';
 import { createBoardView, type BoardMarker } from './boardView';
 
 export const renderPuzzleList = (): HTMLElement => {
@@ -131,7 +136,8 @@ export const renderPuzzle = (puzzleId: string): HTMLElement => {
   };
 
   const playBotReply = (state: GameState): { state: GameState; move: Point | null; capturedUser: boolean } => {
-    const move = chooseBotMove(state, state.toPlay, refuterConfig);
+    const timeMs = getBotTimeMs(DEFAULT_TIME_MS);
+    const move = chooseBotMove(state, state.toPlay, refuterConfig, timeMs);
     if (!move) return { state, move: null, capturedUser: false };
     const r = applyMove(state, move);
     if (!r) return { state, move: null, capturedUser: false };

@@ -2,6 +2,7 @@ const SOLVED_KEY = 'tmg.solved';
 const GAMES_WON_KEY = 'tmg.games_won';
 const GAMES_LOST_KEY = 'tmg.games_lost';
 const BOT_PRESET_KEY = 'tmg.bot_preset';
+const BOT_TIME_KEY = 'tmg.bot_time_ms';
 
 const safeRead = (key: string): string | null => {
   try {
@@ -55,3 +56,11 @@ export const recordGame = (won: boolean): void => {
 
 export const getBotPreset = (): string => safeRead(BOT_PRESET_KEY) ?? '0';
 export const setBotPreset = (id: string): void => safeWrite(BOT_PRESET_KEY, id);
+
+export const getBotTimeMs = (defaultMs: number): number => {
+  const raw = safeRead(BOT_TIME_KEY);
+  if (!raw) return defaultMs;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : defaultMs;
+};
+export const setBotTimeMs = (ms: number): void => safeWrite(BOT_TIME_KEY, String(ms));

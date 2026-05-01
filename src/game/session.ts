@@ -33,6 +33,7 @@ export const createGameSession = (
   size: number,
   human: Color,
   botConfig: BotConfig = { level: 0 },
+  botTimeMs?: number,
 ): GameSession => {
   let state: GameState;
   let status: GameStatus;
@@ -84,7 +85,7 @@ export const createGameSession = (
     playBotMove() {
       if (status.kind !== 'in-progress') return null;
       if (state.toPlay === human) return null;
-      const r = playBot(state, botConfig);
+      const r = playBot(state, botConfig, botTimeMs);
       if (!r) return null;
       const opp = human;
       const before = state.board.cells.filter((c) => c === opp).length;

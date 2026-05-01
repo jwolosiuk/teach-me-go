@@ -1,6 +1,18 @@
 import { createGameSession } from '../game/session';
-import { BOT_PRESETS, findPreset } from '../game/bot';
-import { getBotPreset, recordGame, setBotPreset } from '../storage/progress';
+import {
+  BOT_PRESETS,
+  DEFAULT_TIME_MS,
+  TIME_MAX_MS,
+  TIME_MIN_MS,
+  findPreset,
+} from '../game/bot';
+import {
+  getBotPreset,
+  getBotTimeMs,
+  recordGame,
+  setBotPreset,
+  setBotTimeMs,
+} from '../storage/progress';
 import type { Color, Point } from '../engine/types';
 import { createBoardView, type BoardMarker } from './boardView';
 
@@ -69,6 +81,22 @@ export const renderGame = (): HTMLElement => {
 
   panel.appendChild(levelRow);
 
+  const timeRow = document.createElement('div');
+  timeRow.style.marginBottom = '12px';
+  const timeLabel = document.createElement('label');
+  timeLabel.style.fontSize = '14px';
+  timeLabel.textContent = 'Max time per move (s): ';
+  const timeInput = document.createElement('input');
+  timeInput.type = 'number';
+  timeInput.min = String(TIME_MIN_MS / 1000);
+  timeInput.max = String(TIME_MAX_MS / 1000);
+  timeInput.step = '0.5';
+  timeInput.style.width = '64px';
+  timeInput.value = (getBotTimeMs(DEFAULT_TIME_MS) / 1000).toString();
+  timeRow.appendChild(timeLabel);
+  timeRow.appendChild(timeInput);
+  panel.appendChild(timeRow);
+
   const status = document.createElement('div');
   status.className = 'feedback info';
   panel.appendChild(status);
@@ -85,7 +113,14 @@ export const renderGame = (): HTMLElement => {
   buttonRow.appendChild(resetBtn);
   panel.appendChild(buttonRow);
 
-  let session = createGameSession(9, 'B', findPreset(getBotPreset()).config);
+  const readTimeMs = (): number => {
+    const sec = Number(timeInput.value);
+    if (!Number.isFinite(sec) || sec <= 0) return DEFAULT_TIME_MS;
+    const ms = Math.round(sec * 1000);
+    return Math.min(TIME_MAX_MS, Math.max(TIME_MIN_MS, ms));
+  };
+
+  let session = createGameSession(9, 'B', findPreset(getBotPreset()).config, readTimeMs());
   let recorded = false;
   let lastHuman: Point | null = null;
   let botBusy = false;
@@ -157,7 +192,7 @@ export const renderGame = (): HTMLElement => {
   };
 
   const start = (color: Color, presetId: string) => {
-    session = createGameSession(9, color, findPreset(presetId).config);
+    session = createGameSession(9, color, findPreset(presetId).config, readTimeMs());
     recorded = false;
     lastHuman = null;
     botBusy = false;
@@ -173,6 +208,13 @@ export const renderGame = (): HTMLElement => {
     lastHuman = null;
     renderBoard();
     updateStatus();
+  });
+
+  timeInput.addEventListener('change', () => {
+    const ms = readTimeMs();
+    timeInput.value = (ms / 1000).toString();
+    setBotTimeMs(ms);
+    start(colorSelect.value as Color, levelSelect.value);
   });
 
   colorSelect.addEventListener('change', () => {

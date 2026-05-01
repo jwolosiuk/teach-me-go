@@ -2,13 +2,14 @@ import { groupAt, neighbors, type Board } from '../engine/board';
 import { applyMove, legalMoves, tryPlace, type GameState } from '../engine/rules';
 import { opposite, type Color, type Point } from '../engine/types';
 
-export type BotLevel = 0 | 1 | 2 | 3;
+export type BotLevel = 0 | 1 | 2 | 3 | 4;
 
 export type BotConfig =
   | { level: 0 }
   | { level: 1 }
   | { level: 2; depth: number }
-  | { level: 3; depth: number };
+  | { level: 3; depth: number }
+  | { level: 4; depth: number };
 
 export type BotPreset = {
   id: string;
@@ -78,10 +79,31 @@ export const BOT_PRESETS: BotPreset[] = [
     description: 'Expert — depth 5 + ladder extension (slowest, strongest).',
     config: { level: 3, depth: 5 },
   },
+  {
+    id: '4.4',
+    label: 'Level 4.4',
+    description: 'Pro — iterative deepening to depth 4 + move pruning + ladder ext.',
+    config: { level: 4, depth: 4 },
+  },
+  {
+    id: '4.5',
+    label: 'Level 4.5',
+    description: 'Pro — iterative deepening to depth 5 + move pruning + ladder ext.',
+    config: { level: 4, depth: 5 },
+  },
+  {
+    id: '4.6',
+    label: 'Level 4.6',
+    description: 'Pro — iterative deepening to depth 6 + move pruning + ladder ext.',
+    config: { level: 4, depth: 6 },
+  },
 ];
 
 export const DEFAULT_PRESET_ID = '0';
-export const PUZZLE_REFUTER_PRESET_ID = '2.3';
+export const PUZZLE_REFUTER_PRESET_ID = '4.5';
+export const DEFAULT_TIME_MS = 1500;
+export const TIME_MIN_MS = 200;
+export const TIME_MAX_MS = 30000;
 
 export const findPreset = (id: string): BotPreset =>
   BOT_PRESETS.find((p) => p.id === id) ?? BOT_PRESETS[0]!;
@@ -241,14 +263,23 @@ const chooseSafeGreedy = (state: GameState, color: Color): Point | null => {
 };
 
 // ---------------------------------------------------------------------------
-// Level 2 / 3: alpha-beta minimax.
+// Level 2 / 3: alpha-beta minimax with iterative deepening.
 // ---------------------------------------------------------------------------
+
+// Group "criticality" rises sharply as liberties drop.
+const groupWeight = (libs: number, stones: number): number => {
+  if (libs <= 0) return 0;
+  if (libs === 1) return 100 * stones;
+  if (libs === 2) return 15 * stones;
+  if (libs === 3) return 5 * stones;
+  return stones;
+};
+
 const evaluate = (board: Board, color: Color): number => {
-  const opp = opposite(color);
+  let ownScore = 0;
+  let oppScore = 0;
   let ownLibs = 0;
   let oppLibs = 0;
-  let ownAtariStones = 0;
-  let oppAtariStones = 0;
   const seen = new Set<string>();
   for (let y = 0; y < board.size; y++) {
     for (let x = 0; x < board.size; x++) {
@@ -259,22 +290,56 @@ const evaluate = (board: Board, color: Color): number => {
       const grp = groupAt(board, { x, y });
       if (!grp) continue;
       for (const s of grp.stones) seen.add(`${s.x},${s.y}`);
+      const w = groupWeight(grp.liberties.length, grp.stones.length);
       if (cell === color) {
+        ownScore += w;
         ownLibs += grp.liberties.length;
-        if (grp.liberties.length === 1) ownAtariStones += grp.stones.length;
       } else {
+        oppScore += w;
         oppLibs += grp.liberties.length;
-        if (grp.liberties.length === 1) oppAtariStones += grp.stones.length;
       }
     }
-    void opp;
   }
-  return ownLibs - oppLibs - ownAtariStones * 25 + oppAtariStones * 25;
+  // Critical groups are weighted heavily; total liberties act as a tie-breaker.
+  // We *subtract* ownScore (own atari = bad) and *add* oppScore (opp atari = good).
+  return oppScore - ownScore + (ownLibs - oppLibs);
 };
 
-const orderMoves = (state: GameState, color: Color): Point[] => {
+// Mark cells within Manhattan distance `maxDist` of any stone.
+const nearStoneMask = (board: Board, maxDist: number): Uint8Array => {
+  const size = board.size;
+  const mask = new Uint8Array(size * size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (board.cells[y * size + x] === null) continue;
+      const yMin = Math.max(0, y - maxDist);
+      const yMax = Math.min(size - 1, y + maxDist);
+      const xMin = Math.max(0, x - maxDist);
+      const xMax = Math.min(size - 1, x + maxDist);
+      for (let yy = yMin; yy <= yMax; yy++) {
+        for (let xx = xMin; xx <= xMax; xx++) {
+          if (Math.abs(xx - x) + Math.abs(yy - y) <= maxDist) {
+            mask[yy * size + xx] = 1;
+          }
+        }
+      }
+    }
+  }
+  return mask;
+};
+
+const PRUNE_FALLBACK_THRESHOLD = 4;
+
+const orderMoves = (state: GameState, color: Color, prune: boolean): Point[] => {
+  const all = legalMoves(state, color);
+  let candidates = all;
+  if (prune) {
+    const mask = nearStoneMask(state.board, 2);
+    const filtered = all.filter((m) => mask[m.y * state.board.size + m.x] === 1);
+    if (filtered.length >= PRUNE_FALLBACK_THRESHOLD) candidates = filtered;
+  }
   const scored: { m: Point; score: number }[] = [];
-  for (const m of legalMoves(state, color)) {
+  for (const m of candidates) {
     const r = tryPlace(state, m, color);
     if (!r.ok) continue;
     let score = 0;
@@ -284,7 +349,8 @@ const orderMoves = (state: GameState, color: Color): Point[] => {
     for (const n of neighbors(r.result.board, m)) {
       if (r.result.board.cells[n.y * r.result.board.size + n.x] === opposite(color)) {
         const oppGrp = groupAt(r.result.board, n);
-        if (oppGrp && oppGrp.liberties.length === 1) score += 50;
+        if (oppGrp && oppGrp.liberties.length === 1) score += 200;
+        else if (oppGrp && oppGrp.liberties.length === 2) score += 30;
       }
     }
     scored.push({ m, score });
@@ -295,8 +361,7 @@ const orderMoves = (state: GameState, color: Color): Point[] => {
 
 const TERMINAL = 100000;
 const MAX_PLIES = 40;
-const MAX_NODES = 50000;
-const MAX_TIME_MS = 1500;
+const MAX_NODES = 200000;
 const MAX_EXTENSIONS_PER_BRANCH = 6;
 
 // True iff `move` was just played by `mover` and turned a previously-non-atari
@@ -330,7 +395,12 @@ const moveCreatesNewAtari = (
   return false;
 };
 
-type SearchCtx = { nodes: number; aborted: boolean; deadline: number };
+type SearchCtx = {
+  nodes: number;
+  aborted: boolean;
+  deadline: number;
+  prune: boolean;
+};
 
 // Alpha-beta minimax. If `extendLadders` is true, a move that just creates a
 // fresh atari on an adjacent opp group does not consume search depth, capped
@@ -348,7 +418,7 @@ const search = (
 ): number => {
   ctx.nodes += 1;
   if (ctx.aborted) return evaluate(state.board, rootColor);
-  if (ctx.nodes > MAX_NODES || (ctx.nodes & 0xff) === 0 && performance.now() > ctx.deadline) {
+  if (ctx.nodes > MAX_NODES || ((ctx.nodes & 0xff) === 0 && performance.now() > ctx.deadline)) {
     ctx.aborted = true;
     return evaluate(state.board, rootColor);
   }
@@ -356,7 +426,7 @@ const search = (
   if (plies >= MAX_PLIES) return evaluate(state.board, rootColor);
   if (depth <= 0) return evaluate(state.board, rootColor);
 
-  const moves = orderMoves(state, state.toPlay);
+  const moves = orderMoves(state, state.toPlay, ctx.prune);
   if (moves.length === 0) return evaluate(state.board, rootColor);
 
   let best = isMax ? -Infinity : Infinity;
@@ -407,29 +477,34 @@ const search = (
   return best;
 };
 
-const chooseMinimax = (
+// One root pass at a fixed depth, returning the best move + score from that
+// pass and whether the pass completed (didn't abort mid-iteration).
+const rootSearch = (
   state: GameState,
   color: Color,
   depth: number,
   extendLadders: boolean,
-): Point | null => {
-  for (const m of orderMoves(state, color)) {
-    const r = tryPlace(state, m, color);
-    if (r.ok && r.result.captured.length > 0) return m;
-  }
+  preferredFirst: Point | null,
+  ctx: SearchCtx,
+): { move: Point | null; score: number; complete: boolean } => {
+  const ordered = orderMoves(state, color, ctx.prune);
+  const movesAtRoot = preferredFirst
+    ? [
+        preferredFirst,
+        ...ordered.filter(
+          (m) => !(m.x === preferredFirst.x && m.y === preferredFirst.y),
+        ),
+      ]
+    : ordered;
 
-  const ctx: SearchCtx = {
-    nodes: 0,
-    aborted: false,
-    deadline: performance.now() + MAX_TIME_MS,
-  };
   let bestScore = -Infinity;
   let bestMove: Point | null = null;
   let alpha = -Infinity;
   const beta = Infinity;
   const before = state.board;
   const mover = color;
-  for (const m of orderMoves(state, color)) {
+
+  for (const m of movesAtRoot) {
     const r = applyMove(state, m);
     if (!r) continue;
     let score: number;
@@ -438,10 +513,7 @@ const chooseMinimax = (
     } else {
       let nextDepth = depth - 1;
       let nextExtensions = MAX_EXTENSIONS_PER_BRANCH;
-      if (
-        extendLadders &&
-        moveCreatesNewAtari(before, r.state.board, m, mover)
-      ) {
+      if (extendLadders && moveCreatesNewAtari(before, r.state.board, m, mover)) {
         nextDepth = depth;
         nextExtensions -= 1;
       }
@@ -462,7 +534,49 @@ const chooseMinimax = (
       bestMove = m;
     }
     if (bestScore > alpha) alpha = bestScore;
+    if (ctx.aborted) {
+      return { move: bestMove, score: bestScore, complete: false };
+    }
+  }
+  return { move: bestMove, score: bestScore, complete: true };
+};
+
+const chooseMinimax = (
+  state: GameState,
+  color: Color,
+  depth: number,
+  extendLadders: boolean,
+  prune: boolean,
+  iterative: boolean,
+  timeMs: number,
+): Point | null => {
+  for (const m of orderMoves(state, color, prune)) {
+    const r = tryPlace(state, m, color);
+    if (r.ok && r.result.captured.length > 0) return m;
+  }
+
+  const ctx: SearchCtx = {
+    nodes: 0,
+    aborted: false,
+    deadline: performance.now() + timeMs,
+    prune,
+  };
+
+  if (!iterative) {
+    return rootSearch(state, color, depth, extendLadders, null, ctx).move;
+  }
+
+  let bestMove: Point | null = null;
+  for (let d = 2; d <= depth; d++) {
+    const pass = rootSearch(state, color, d, extendLadders, bestMove, ctx);
+    if (pass.move) {
+      // Only commit completed iterations; partial iterations may be biased
+      // by the cutoff, but they still beat returning nothing.
+      if (pass.complete || bestMove === null) bestMove = pass.move;
+    }
     if (ctx.aborted) break;
+    if (pass.score >= TERMINAL - 100) break; // forced win, stop searching deeper
+    if (performance.now() > ctx.deadline) break;
   }
   return bestMove;
 };
@@ -474,6 +588,7 @@ export const chooseBotMove = (
   state: GameState,
   color: Color,
   config: BotConfig = { level: 0 },
+  timeMs: number = DEFAULT_TIME_MS,
 ): Point | null => {
   switch (config.level) {
     case 0:
@@ -481,17 +596,20 @@ export const chooseBotMove = (
     case 1:
       return chooseSafeGreedy(state, color);
     case 2:
-      return chooseMinimax(state, color, config.depth, false);
+      return chooseMinimax(state, color, config.depth, false, false, false, timeMs);
     case 3:
-      return chooseMinimax(state, color, config.depth, true);
+      return chooseMinimax(state, color, config.depth, true, false, false, timeMs);
+    case 4:
+      return chooseMinimax(state, color, config.depth, true, true, true, timeMs);
   }
 };
 
 export const playBot = (
   state: GameState,
   config: BotConfig = { level: 0 },
+  timeMs: number = DEFAULT_TIME_MS,
 ): { state: GameState; move: Point } | null => {
-  const move = chooseBotMove(state, state.toPlay, config);
+  const move = chooseBotMove(state, state.toPlay, config, timeMs);
   if (!move) return null;
   const r = applyMove(state, move);
   if (!r) return null;
