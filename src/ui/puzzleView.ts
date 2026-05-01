@@ -140,10 +140,14 @@ export const renderPuzzle = (puzzleId: string): HTMLElement => {
 
   let botBusy = false;
 
+  const afterPaint = (cb: () => void) => {
+    requestAnimationFrame(() => requestAnimationFrame(cb));
+  };
+
   const scheduleBotReply = () => {
     if (!freeState || frozen || botBusy) return;
     botBusy = true;
-    setTimeout(() => {
+    afterPaint(() => {
       if (!freeState) {
         botBusy = false;
         return;
@@ -162,7 +166,7 @@ export const renderPuzzle = (puzzleId: string): HTMLElement => {
         );
       }
       botBusy = false;
-    }, 0);
+    });
   };
 
   const enterFreePlay = (wrongMove: Point) => {

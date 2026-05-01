@@ -75,6 +75,11 @@ export const renderGame = (): HTMLElement => {
 
   const buttonRow = document.createElement('div');
   buttonRow.className = 'button-row';
+  const undoBtn = document.createElement('button');
+  undoBtn.className = 'secondary';
+  undoBtn.textContent = '↶ Undo';
+  undoBtn.disabled = true;
+  buttonRow.appendChild(undoBtn);
   const resetBtn = document.createElement('button');
   resetBtn.textContent = 'New game';
   buttonRow.appendChild(resetBtn);
@@ -84,6 +89,34 @@ export const renderGame = (): HTMLElement => {
   let recorded = false;
   let lastHuman: Point | null = null;
   let botBusy = false;
+
+  // Run the callback after the browser has painted at least once. Two rAFs
+  // guarantee that we land in a frame *after* the latest synchronous render
+  // has been committed to the screen.
+  const afterPaint = (cb: () => void) => {
+    requestAnimationFrame(() => requestAnimationFrame(cb));
+  };
+
+  const renderBoard = () => {
+    const markers: BoardMarker[] = [];
+    if (session.lastMove) markers.push({ kind: 'last-move', point: session.lastMove });
+    view.render(session.state.board, markers);
+  };
+
+  const triggerBotMove = () => {
+    if (!session.isBotTurn()) return;
+    botBusy = true;
+    updateStatus();
+    afterPaint(() => {
+      const bot = session.playBotMove();
+      const markers: BoardMarker[] = [];
+      if (lastHuman) markers.push({ kind: 'last-move', point: lastHuman });
+      if (bot) markers.push({ kind: 'last-move', point: bot.move });
+      view.render(session.state.board, markers);
+      botBusy = false;
+      updateStatus();
+    });
+  };
 
   const view = createBoardView({
     onClick: (p) => {
@@ -95,17 +128,8 @@ export const renderGame = (): HTMLElement => {
       lastHuman = r.humanMove;
       view.render(session.state.board, [{ kind: 'last-move', point: r.humanMove }]);
       updateStatus();
-      if (session.status.kind === 'in-progress' && session.isBotTurn()) {
-        botBusy = true;
-        setTimeout(() => {
-          const bot = session.playBotMove();
-          const markers: BoardMarker[] = [];
-          if (lastHuman) markers.push({ kind: 'last-move', point: lastHuman });
-          if (bot) markers.push({ kind: 'last-move', point: bot.move });
-          view.render(session.state.board, markers);
-          botBusy = false;
-          updateStatus();
-        }, 0);
+      if (session.status.kind === 'in-progress') {
+        triggerBotMove();
       }
     },
     showCoordinates: true,
@@ -113,6 +137,7 @@ export const renderGame = (): HTMLElement => {
   boardWrap.appendChild(view.element);
 
   const updateStatus = () => {
+    undoBtn.disabled = botBusy || !session.canUndo();
     if (session.status.kind === 'won') {
       const won = session.status.winner === session.human;
       status.className = `feedback ${won ? 'good' : 'bad'}`;
@@ -136,22 +161,19 @@ export const renderGame = (): HTMLElement => {
     recorded = false;
     lastHuman = null;
     botBusy = false;
-    view.render(session.state.board, []);
+    renderBoard();
     updateStatus();
-    // If the bot plays first (human is white), kick it off.
-    if (session.isBotTurn()) {
-      botBusy = true;
-      setTimeout(() => {
-        const bot = session.playBotMove();
-        const markers: BoardMarker[] = [];
-        if (bot) markers.push({ kind: 'last-move', point: bot.move });
-        view.render(session.state.board, markers);
-        botBusy = false;
-        updateStatus();
-      }, 0);
-    }
+    if (session.isBotTurn()) triggerBotMove();
   };
   start('B', getBotPreset());
+
+  undoBtn.addEventListener('click', () => {
+    if (botBusy) return;
+    if (!session.undo()) return;
+    lastHuman = null;
+    renderBoard();
+    updateStatus();
+  });
 
   colorSelect.addEventListener('change', () => {
     start(colorSelect.value as Color, levelSelect.value);
