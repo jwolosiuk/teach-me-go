@@ -19,5 +19,5 @@
     "types": ["vitest/globals"]
   },
   "include": ["src"],
-  "exclude": ["src/puzzles/integrity.ts"]
+  "exclude": ["src/puzzles/integrity.ts", "src/puzzles/generate.ts"]
 }

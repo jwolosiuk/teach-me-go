@@ -83,7 +83,7 @@ main {
 .panel h2 { margin-top: 0; font-size: 16px; }
 .panel p { font-size: 14px; color: var(--muted); }
 
-.board { width: 100%; max-width: 600px; cursor: pointer; user-select: none; }
+.board { width: 100%; max-width: 600px; aspect-ratio: 1 / 1; height: auto; cursor: pointer; user-select: none; touch-action: manipulation; }
 .board-bg { fill: var(--board-bg); }
 .board-line { stroke: var(--board-line); stroke-width: 1; }
 .board-star { fill: var(--board-line); }

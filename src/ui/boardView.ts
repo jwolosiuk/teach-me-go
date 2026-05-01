@@ -46,12 +46,14 @@ export const createBoardView = (opts: BoardViewOptions = {}): BoardView => {
   const coordToPx = (x: number) => margin + x * cellSize;
 
   const pxToCoord = (clientX: number, clientY: number, size: number): Point | null => {
-    const rect = svg.getBoundingClientRect();
-    const scale = rect.width / (margin * 2 + cellSize * (size - 1));
-    const localX = (clientX - rect.left) / scale;
-    const localY = (clientY - rect.top) / scale;
-    const x = Math.round((localX - margin) / cellSize);
-    const y = Math.round((localY - margin) / cellSize);
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const local = pt.matrixTransform(ctm.inverse());
+    const x = Math.round((local.x - margin) / cellSize);
+    const y = Math.round((local.y - margin) / cellSize);
     if (x < 0 || y < 0 || x >= size || y >= size) return null;
     return { x, y };
   };
