@@ -42,31 +42,66 @@ export type Group = {
 };
 
 export const groupAt = (board: Board, start: Point): Group | null => {
-  const color = get(board, start);
-  if (color === null) return null;
-  const visited = new Set<number>();
-  const libSet = new Set<number>();
-  const stones: Point[] = [];
-  const stack: Point[] = [start];
+  const size = board.size;
+  const startIdx = start.y * size + start.x;
+  const color = board.cells[startIdx];
+  if (color === null || color === undefined) return null;
+  const total = size * size;
+  const visited = new Uint8Array(total);
+  const libMask = new Uint8Array(total);
+  const stoneIdxs: number[] = [];
+  const stack: number[] = [startIdx];
+  visited[startIdx] = 1;
   while (stack.length) {
-    const p = stack.pop()!;
-    const i = idx(board, p);
-    if (visited.has(i)) continue;
-    visited.add(i);
-    stones.push(p);
-    for (const n of neighbors(board, p)) {
-      const ni = idx(board, n);
-      const c = board.cells[ni];
-      if (c === null) {
-        libSet.add(ni);
-      } else if (c === color && !visited.has(ni)) {
-        stack.push(n);
+    const i = stack.pop()!;
+    stoneIdxs.push(i);
+    const x = i % size;
+    const y = (i / size) | 0;
+    // up
+    if (y > 0) {
+      const ni = i - size;
+      if (!visited[ni]) {
+        const c = board.cells[ni];
+        if (c === null) libMask[ni] = 1;
+        else if (c === color) { visited[ni] = 1; stack.push(ni); }
+      }
+    }
+    // down
+    if (y < size - 1) {
+      const ni = i + size;
+      if (!visited[ni]) {
+        const c = board.cells[ni];
+        if (c === null) libMask[ni] = 1;
+        else if (c === color) { visited[ni] = 1; stack.push(ni); }
+      }
+    }
+    // left
+    if (x > 0) {
+      const ni = i - 1;
+      if (!visited[ni]) {
+        const c = board.cells[ni];
+        if (c === null) libMask[ni] = 1;
+        else if (c === color) { visited[ni] = 1; stack.push(ni); }
+      }
+    }
+    // right
+    if (x < size - 1) {
+      const ni = i + 1;
+      if (!visited[ni]) {
+        const c = board.cells[ni];
+        if (c === null) libMask[ni] = 1;
+        else if (c === color) { visited[ni] = 1; stack.push(ni); }
       }
     }
   }
+  const stones: Point[] = new Array(stoneIdxs.length);
+  for (let k = 0; k < stoneIdxs.length; k++) {
+    const i = stoneIdxs[k]!;
+    stones[k] = { x: i % size, y: (i / size) | 0 };
+  }
   const liberties: Point[] = [];
-  for (const li of libSet) {
-    liberties.push({ x: li % board.size, y: Math.floor(li / board.size) });
+  for (let i = 0; i < total; i++) {
+    if (libMask[i]) liberties.push({ x: i % size, y: (i / size) | 0 });
   }
   return { color, stones, liberties };
 };
