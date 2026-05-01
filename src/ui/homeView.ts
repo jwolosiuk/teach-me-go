@@ -1,4 +1,4 @@
-import { ALL_PUZZLES } from '../puzzles/data/index';
+import { allPuzzles } from '../puzzles/data/index';
 import { gamesLost, gamesWon, solvedIds } from '../storage/progress';
 
 export const renderHome = (): HTMLElement => {
@@ -21,7 +21,7 @@ export const renderHome = (): HTMLElement => {
   stats.style.color = 'var(--muted)';
   stats.style.fontSize = '14px';
   stats.textContent =
-    `Puzzles solved: ${solved.size} / ${ALL_PUZZLES.length} · ` +
+    `Puzzles solved: ${solved.size} / ${allPuzzles().length} · ` +
     `Atari Go: ${gamesWon()} won, ${gamesLost()} lost`;
   wrap.appendChild(stats);
 

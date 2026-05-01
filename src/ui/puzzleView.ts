@@ -6,10 +6,12 @@ import {
   findPreset,
   PUZZLE_REFUTER_PRESET_ID,
 } from '../game/bot';
-import { ALL_PUZZLES } from '../puzzles/data/index';
+import { allPuzzles } from '../puzzles/data/index';
+import { generatePuzzles } from '../puzzles/generator/core';
 import { startSession, type RunnerSession } from '../puzzles/runner';
 import { CATEGORY_LABELS, CATEGORY_TIER, type Puzzle } from '../puzzles/types';
 import { getBotTimeMs, isSolved, markSolved, solvedIds } from '../storage/progress';
+import { addUserPuzzles, clearUserPuzzles, getUserPuzzles } from '../storage/userPuzzles';
 import { createBoardView, type BoardMarker } from './boardView';
 
 export const renderPuzzleList = (): HTMLElement => {
@@ -19,54 +21,166 @@ export const renderPuzzleList = (): HTMLElement => {
   heading.textContent = 'Puzzles';
   wrap.appendChild(heading);
 
-  const solved = solvedIds();
-  const grouped: Record<1 | 2 | 3, Puzzle[]> = { 1: [], 2: [], 3: [] };
-  for (const p of ALL_PUZZLES) grouped[CATEGORY_TIER[p.category]].push(p);
+  // ── Generate panel ────────────────────────────────────────────────────────
+  const gen = document.createElement('section');
+  gen.className = 'panel';
+  gen.style.marginBottom = '24px';
+  const genHeading = document.createElement('h3');
+  genHeading.textContent = 'Generate puzzles';
+  genHeading.style.marginTop = '0';
+  gen.appendChild(genHeading);
+  const genHelp = document.createElement('p');
+  genHelp.style.fontSize = '13px';
+  genHelp.style.color = 'var(--muted)';
+  genHelp.textContent =
+    'Run self-play games and mine forced capture / save patterns. Difficulty controls the maximum number of forcing moves in a line.';
+  gen.appendChild(genHelp);
 
-  for (const tier of [1, 2, 3] as const) {
-    const sec = document.createElement('section');
-    sec.className = 'tier-section';
-    const h = document.createElement('h3');
-    h.textContent = `Tier ${tier}`;
-    sec.appendChild(h);
-    const ul = document.createElement('ul');
-    ul.className = 'puzzle-list';
-    for (const p of grouped[tier]) {
-      const li = document.createElement('li');
-      li.addEventListener('click', () => {
-        location.hash = `#/puzzles/${p.id}`;
-      });
-      const left = document.createElement('div');
-      const title = document.createElement('div');
-      title.textContent = `${p.id}: ${CATEGORY_LABELS[p.category]}`;
-      const meta = document.createElement('div');
-      meta.className = 'meta';
-      meta.textContent = p.description ?? '';
-      left.appendChild(title);
-      left.appendChild(meta);
-      const right = document.createElement('div');
-      right.className = solved.has(p.id) ? 'solved' : 'meta';
-      right.textContent = solved.has(p.id) ? '✓ solved' : 'unsolved';
-      li.appendChild(left);
-      li.appendChild(right);
-      ul.appendChild(li);
-    }
-    sec.appendChild(ul);
-    wrap.appendChild(sec);
+  const formRow = document.createElement('div');
+  formRow.style.display = 'flex';
+  formRow.style.flexWrap = 'wrap';
+  formRow.style.gap = '12px';
+  formRow.style.alignItems = 'center';
+
+  const countLabel = document.createElement('label');
+  countLabel.style.fontSize = '14px';
+  countLabel.textContent = 'Count: ';
+  const countInput = document.createElement('input');
+  countInput.type = 'number';
+  countInput.min = '1';
+  countInput.max = '100';
+  countInput.value = '10';
+  countInput.style.width = '64px';
+  countLabel.appendChild(countInput);
+
+  const stepsLabel = document.createElement('label');
+  stepsLabel.style.fontSize = '14px';
+  stepsLabel.textContent = ' Max steps: ';
+  const stepsSelect = document.createElement('select');
+  for (const s of [1, 2, 3, 4, 5]) {
+    const o = document.createElement('option');
+    o.value = String(s);
+    o.textContent = `${s}`;
+    if (s === 3) o.selected = true;
+    stepsSelect.appendChild(o);
   }
+  stepsLabel.appendChild(stepsSelect);
+
+  const generateBtn = document.createElement('button');
+  generateBtn.textContent = 'Generate';
+
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'secondary';
+  clearBtn.textContent = 'Clear generated';
+
+  const genStatus = document.createElement('span');
+  genStatus.className = 'meta';
+  genStatus.style.fontSize = '13px';
+  const userCount = getUserPuzzles().length;
+  genStatus.textContent = userCount > 0 ? `${userCount} user-generated stored.` : '';
+
+  formRow.appendChild(countLabel);
+  formRow.appendChild(stepsLabel);
+  formRow.appendChild(generateBtn);
+  formRow.appendChild(clearBtn);
+  formRow.appendChild(genStatus);
+  gen.appendChild(formRow);
+  wrap.appendChild(gen);
+
+  // ── Puzzle list ───────────────────────────────────────────────────────────
+  const listContainer = document.createElement('div');
+  wrap.appendChild(listContainer);
+
+  const renderList = () => {
+    listContainer.innerHTML = '';
+    const solved = solvedIds();
+    const grouped: Record<1 | 2 | 3, Puzzle[]> = { 1: [], 2: [], 3: [] };
+    for (const p of allPuzzles()) grouped[CATEGORY_TIER[p.category]].push(p);
+
+    for (const tier of [1, 2, 3] as const) {
+      if (grouped[tier].length === 0) continue;
+      const sec = document.createElement('section');
+      sec.className = 'tier-section';
+      const h = document.createElement('h3');
+      h.textContent = `Tier ${tier}`;
+      sec.appendChild(h);
+      const ul = document.createElement('ul');
+      ul.className = 'puzzle-list';
+      for (const p of grouped[tier]) {
+        const li = document.createElement('li');
+        li.addEventListener('click', () => {
+          location.hash = `#/puzzles/${p.id}`;
+        });
+        const left = document.createElement('div');
+        const title = document.createElement('div');
+        const stepCount = p.lines[0]?.steps.length ?? 1;
+        const stepBadge = stepCount > 1 ? ` · ${stepCount}-step` : '';
+        title.textContent = `${p.id}: ${CATEGORY_LABELS[p.category]}${stepBadge}`;
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = p.description ?? '';
+        left.appendChild(title);
+        left.appendChild(meta);
+        const right = document.createElement('div');
+        right.className = solved.has(p.id) ? 'solved' : 'meta';
+        right.textContent = solved.has(p.id) ? '✓ solved' : 'unsolved';
+        li.appendChild(left);
+        li.appendChild(right);
+        ul.appendChild(li);
+      }
+      sec.appendChild(ul);
+      listContainer.appendChild(sec);
+    }
+  };
+  renderList();
+
+  generateBtn.addEventListener('click', () => {
+    const count = Math.max(1, Math.min(100, Number(countInput.value) | 0));
+    const maxSteps = Math.max(1, Math.min(5, Number(stepsSelect.value) | 0));
+    generateBtn.disabled = true;
+    clearBtn.disabled = true;
+    genStatus.textContent = 'Generating (this can take a few seconds)...';
+    // Defer so the UI repaints first.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        try {
+          const start = performance.now();
+          const fresh = generatePuzzles({ count, maxSteps, size: 9 });
+          addUserPuzzles(fresh);
+          const elapsed = ((performance.now() - start) / 1000).toFixed(1);
+          genStatus.textContent = `Added ${fresh.length} puzzles in ${elapsed}s. Total user puzzles: ${getUserPuzzles().length}.`;
+          renderList();
+        } catch (e) {
+          genStatus.textContent = `Error: ${(e as Error).message}`;
+        } finally {
+          generateBtn.disabled = false;
+          clearBtn.disabled = false;
+        }
+      }),
+    );
+  });
+
+  clearBtn.addEventListener('click', () => {
+    if (!confirm('Remove all user-generated puzzles? Built-in puzzles stay.')) return;
+    clearUserPuzzles();
+    genStatus.textContent = 'Cleared.';
+    renderList();
+  });
+
   return wrap;
 };
 
 const findNext = (id: string): Puzzle | null => {
-  const idx = ALL_PUZZLES.findIndex((p) => p.id === id);
-  if (idx === -1 || idx + 1 >= ALL_PUZZLES.length) return null;
-  return ALL_PUZZLES[idx + 1] ?? null;
+  const list = allPuzzles();
+  const idx = list.findIndex((p) => p.id === id);
+  if (idx === -1 || idx + 1 >= list.length) return null;
+  return list[idx + 1] ?? null;
 };
 
 type Mode = 'solving' | 'free-play';
 
 export const renderPuzzle = (puzzleId: string): HTMLElement => {
-  const puzzle = ALL_PUZZLES.find((p) => p.id === puzzleId);
+  const puzzle = allPuzzles().find((p) => p.id === puzzleId);
   const wrap = document.createElement('div');
   if (!puzzle) {
     wrap.textContent = `Puzzle "${puzzleId}" not found.`;
