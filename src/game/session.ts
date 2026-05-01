@@ -1,7 +1,7 @@
 import { createBoard } from '../engine/board';
 import { applyMove, initialState, type GameState } from '../engine/rules';
 import type { Color, Point } from '../engine/types';
-import { playBot } from './bot';
+import { playBot, type BotConfig } from './bot';
 
 export type GameStatus =
   | { kind: 'in-progress' }
@@ -17,7 +17,11 @@ export type GameSession = {
   playHuman: (p: Point) => { ok: false } | { ok: true; humanMove: Point; botMove: Point | null };
 };
 
-export const createGameSession = (size: number, human: Color): GameSession => {
+export const createGameSession = (
+  size: number,
+  human: Color,
+  botConfig: BotConfig = { level: 0 },
+): GameSession => {
   let state: GameState;
   let status: GameStatus;
   let lastMove: Point | null;
@@ -27,7 +31,7 @@ export const createGameSession = (size: number, human: Color): GameSession => {
     status = { kind: 'in-progress' };
     lastMove = null;
     if (human === 'W') {
-      const r = playBot(state);
+      const r = playBot(state, botConfig);
       if (r) {
         state = r.state;
         lastMove = r.move;
@@ -61,7 +65,7 @@ export const createGameSession = (size: number, human: Color): GameSession => {
         status = { kind: 'won', winner: human, capturedAt: p };
         return { ok: true, humanMove: p, botMove: null };
       }
-      const bot = playBot(state);
+      const bot = playBot(state, botConfig);
       if (!bot) return { ok: true, humanMove: p, botMove: null };
       const botCaptured = (() => {
         const before = state.board.cells.filter((c) => c === human).length;

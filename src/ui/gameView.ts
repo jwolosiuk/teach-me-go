@@ -1,5 +1,6 @@
 import { createGameSession } from '../game/session';
-import { recordGame } from '../storage/progress';
+import { BOT_PRESETS, findPreset } from '../game/bot';
+import { getBotPreset, recordGame, setBotPreset } from '../storage/progress';
 import type { Color } from '../engine/types';
 import { createBoardView, type BoardMarker } from './boardView';
 
@@ -21,11 +22,11 @@ export const renderGame = (): HTMLElement => {
 
   const rules = document.createElement('p');
   rules.textContent =
-    'First player to capture any stone wins. The bot plays simple, beginner-level shapes.';
+    'First player to capture any stone wins. Pick a difficulty and play.';
   panel.appendChild(rules);
 
   const colorRow = document.createElement('div');
-  colorRow.style.marginBottom = '12px';
+  colorRow.style.marginBottom = '8px';
   const colorLabel = document.createElement('label');
   colorLabel.style.fontSize = '14px';
   colorLabel.textContent = 'Play as: ';
@@ -40,6 +41,34 @@ export const renderGame = (): HTMLElement => {
   colorRow.appendChild(colorSelect);
   panel.appendChild(colorRow);
 
+  const levelRow = document.createElement('div');
+  levelRow.style.marginBottom = '12px';
+  const levelLabel = document.createElement('label');
+  levelLabel.style.fontSize = '14px';
+  levelLabel.textContent = 'Bot: ';
+  const levelSelect = document.createElement('select');
+  for (const preset of BOT_PRESETS) {
+    const o = document.createElement('option');
+    o.value = preset.id;
+    o.textContent = preset.label;
+    levelSelect.appendChild(o);
+  }
+  levelSelect.value = getBotPreset();
+  levelRow.appendChild(levelLabel);
+  levelRow.appendChild(levelSelect);
+
+  const levelDesc = document.createElement('div');
+  levelDesc.style.fontSize = '12px';
+  levelDesc.style.color = 'var(--muted)';
+  levelDesc.style.marginTop = '4px';
+  const updateLevelDesc = () => {
+    levelDesc.textContent = findPreset(levelSelect.value).description;
+  };
+  updateLevelDesc();
+  levelRow.appendChild(levelDesc);
+
+  panel.appendChild(levelRow);
+
   const status = document.createElement('div');
   status.className = 'feedback info';
   panel.appendChild(status);
@@ -51,7 +80,7 @@ export const renderGame = (): HTMLElement => {
   buttonRow.appendChild(resetBtn);
   panel.appendChild(buttonRow);
 
-  let session = createGameSession(9, 'B');
+  let session = createGameSession(9, 'B', findPreset(getBotPreset()).config);
   let recorded = false;
 
   const view = createBoardView({
@@ -86,21 +115,26 @@ export const renderGame = (): HTMLElement => {
     }
   };
 
-  const start = (color: Color) => {
-    session = createGameSession(9, color);
+  const start = (color: Color, presetId: string) => {
+    session = createGameSession(9, color, findPreset(presetId).config);
     recorded = false;
     const markers: BoardMarker[] = [];
     if (session.lastMove) markers.push({ kind: 'last-move', point: session.lastMove });
     view.render(session.state.board, markers);
     updateStatus();
   };
-  start('B');
+  start('B', getBotPreset());
 
   colorSelect.addEventListener('change', () => {
-    start(colorSelect.value as Color);
+    start(colorSelect.value as Color, levelSelect.value);
+  });
+  levelSelect.addEventListener('change', () => {
+    setBotPreset(levelSelect.value);
+    updateLevelDesc();
+    start(colorSelect.value as Color, levelSelect.value);
   });
   resetBtn.addEventListener('click', () => {
-    start(colorSelect.value as Color);
+    start(colorSelect.value as Color, levelSelect.value);
   });
 
   layout.appendChild(boardWrap);

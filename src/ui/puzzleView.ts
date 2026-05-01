@@ -1,3 +1,6 @@
+import { applyMove, type GameState } from '../engine/rules';
+import type { Color, Point } from '../engine/types';
+import { chooseBotMove, findPreset, PUZZLE_REFUTER_PRESET_ID } from '../game/bot';
 import { ALL_PUZZLES } from '../puzzles/data/index';
 import { startSession, type RunnerSession } from '../puzzles/runner';
 import { CATEGORY_LABELS, CATEGORY_TIER, type Puzzle } from '../puzzles/types';
@@ -54,6 +57,8 @@ const findNext = (id: string): Puzzle | null => {
   if (idx === -1 || idx + 1 >= ALL_PUZZLES.length) return null;
   return ALL_PUZZLES[idx + 1] ?? null;
 };
+
+type Mode = 'solving' | 'free-play';
 
 export const renderPuzzle = (puzzleId: string): HTMLElement => {
   const puzzle = ALL_PUZZLES.find((p) => p.id === puzzleId);
@@ -112,32 +117,117 @@ export const renderPuzzle = (puzzleId: string): HTMLElement => {
   panel.appendChild(buttonRow);
 
   let session: RunnerSession;
+  let mode: Mode = 'solving';
+  let freeState: GameState | null = null;
   let lastMarker: BoardMarker[] = [];
   let solved = false;
+  let frozen = false;
+  const userColor: Color = puzzle.toPlay;
+  const refuterConfig = findPreset(PUZZLE_REFUTER_PRESET_ID).config;
+
+  const setFeedback = (kind: 'good' | 'bad' | 'info', text: string) => {
+    feedback.className = `feedback ${kind}`;
+    feedback.textContent = text;
+  };
+
+  const playBotReply = (state: GameState): { state: GameState; move: Point | null; capturedUser: boolean } => {
+    const move = chooseBotMove(state, state.toPlay, refuterConfig);
+    if (!move) return { state, move: null, capturedUser: false };
+    const r = applyMove(state, move);
+    if (!r) return { state, move: null, capturedUser: false };
+    return { state: r.state, move, capturedUser: r.captured.length > 0 };
+  };
+
+  const enterFreePlay = (wrongMove: Point) => {
+    const r = applyMove(session.state, wrongMove);
+    if (!r) {
+      setFeedback('bad', 'That move is illegal here. Try another point.');
+      return;
+    }
+    mode = 'free-play';
+    freeState = r.state;
+    lastMarker = [{ kind: 'last-move', point: wrongMove }];
+
+    if (r.captured.length > 0) {
+      // The wrong move actually captured something — surprising, but possible
+      // if the puzzle had multiple atari'd opp groups and the user picked the
+      // "wrong" one. Treat it as a win in free-play.
+      view.render(freeState.board, lastMarker);
+      setFeedback(
+        'good',
+        'You captured — but this isn’t the puzzle’s solution line. Reset to retry.',
+      );
+      frozen = true;
+      return;
+    }
+
+    const reply = playBotReply(freeState);
+    freeState = reply.state;
+    if (reply.move) lastMarker.push({ kind: 'last-move', point: reply.move });
+    view.render(freeState.board, lastMarker);
+
+    if (reply.capturedUser) {
+      setFeedback(
+        'bad',
+        'Not the solution — and the bot captured. Reset to retry the puzzle.',
+      );
+      frozen = true;
+    } else {
+      setFeedback(
+        'bad',
+        'Not the solution. Continue playing against the bot (Level 3.3) to see how it punishes that move. Reset to retry.',
+      );
+    }
+  };
+
+  const handleFreePlayClick = (p: Point) => {
+    if (!freeState || frozen) return;
+    if (freeState.toPlay !== userColor) return;
+    const r = applyMove(freeState, p);
+    if (!r) return;
+    freeState = r.state;
+    lastMarker = [{ kind: 'last-move', point: p }];
+
+    if (r.captured.length > 0) {
+      view.render(freeState.board, lastMarker);
+      setFeedback('good', 'You captured. Reset to try the original puzzle solution.');
+      frozen = true;
+      return;
+    }
+
+    const reply = playBotReply(freeState);
+    freeState = reply.state;
+    if (reply.move) lastMarker.push({ kind: 'last-move', point: reply.move });
+    view.render(freeState.board, lastMarker);
+
+    if (reply.capturedUser) {
+      setFeedback('bad', 'Bot captured your stones. Reset to retry the puzzle.');
+      frozen = true;
+    }
+  };
 
   const view = createBoardView({
     onClick: (p) => {
-      if (solved) return;
+      if (frozen || solved) return;
+      if (mode === 'free-play') {
+        handleFreePlayClick(p);
+        return;
+      }
       const out = session.play(p);
       if (out.kind === 'wrong') {
-        feedback.className = 'feedback bad';
-        feedback.textContent = 'Not the right move. Try again.';
+        enterFreePlay(p);
         return;
       }
       lastMarker = [{ kind: 'last-move', point: out.lastUser }];
-      if (out.botMove) {
-        lastMarker.push({ kind: 'last-move', point: out.botMove });
-      }
+      if (out.botMove) lastMarker.push({ kind: 'last-move', point: out.botMove });
       view.render(session.state.board, lastMarker);
       if (out.kind === 'solved') {
         solved = true;
         markSolved(puzzle.id);
-        feedback.className = 'feedback good';
-        feedback.textContent = 'Solved!';
+        setFeedback('good', 'Solved!');
         nextBtn.style.display = findNext(puzzle.id) ? 'inline-block' : 'none';
       } else {
-        feedback.className = 'feedback info';
-        feedback.textContent = 'Good. Keep going.';
+        setFeedback('info', 'Good. Keep going.');
       }
     },
     showCoordinates: true,
@@ -146,21 +236,24 @@ export const renderPuzzle = (puzzleId: string): HTMLElement => {
 
   const start = () => {
     solved = false;
+    frozen = false;
+    mode = 'solving';
+    freeState = null;
     session = startSession(puzzle);
     lastMarker = [];
     view.render(session.state.board, []);
-    feedback.className = isSolved(puzzle.id) ? 'feedback good' : 'feedback info';
-    feedback.textContent = isSolved(puzzle.id)
-      ? 'Already solved. Try again to refresh the pattern.'
-      : 'Find the move.';
+    if (isSolved(puzzle.id)) {
+      setFeedback('good', 'Already solved. Try again to refresh the pattern.');
+    } else {
+      setFeedback('info', 'Find the move.');
+    }
     nextBtn.style.display = 'none';
   };
   start();
 
   resetBtn.addEventListener('click', start);
   hintBtn.addEventListener('click', () => {
-    feedback.className = 'feedback info';
-    feedback.textContent = puzzle.hint ?? 'No hint available.';
+    setFeedback('info', puzzle.hint ?? 'No hint available.');
   });
   nextBtn.addEventListener('click', () => {
     const n = findNext(puzzle.id);

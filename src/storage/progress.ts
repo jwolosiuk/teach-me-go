@@ -1,6 +1,7 @@
 const SOLVED_KEY = 'tmg.solved';
 const GAMES_WON_KEY = 'tmg.games_won';
 const GAMES_LOST_KEY = 'tmg.games_lost';
+const BOT_PRESET_KEY = 'tmg.bot_preset';
 
 const safeRead = (key: string): string | null => {
   try {
@@ -51,3 +52,6 @@ export const recordGame = (won: boolean): void => {
   if (won) safeWrite(GAMES_WON_KEY, String(gamesWon() + 1));
   else safeWrite(GAMES_LOST_KEY, String(gamesLost() + 1));
 };
+
+export const getBotPreset = (): string => safeRead(BOT_PRESET_KEY) ?? '0';
+export const setBotPreset = (id: string): void => safeWrite(BOT_PRESET_KEY, id);
