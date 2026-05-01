@@ -2,14 +2,15 @@ import { groupAt, neighbors, type Board } from '../engine/board';
 import { applyMove, legalMoves, tryPlace, type GameState } from '../engine/rules';
 import { opposite, type Color, type Point } from '../engine/types';
 
-export type BotLevel = 0 | 1 | 2 | 3 | 4;
+export type BotLevel = 0 | 1 | 2 | 3 | 4 | 5;
 
 export type BotConfig =
   | { level: 0 }
   | { level: 1 }
   | { level: 2; depth: number }
   | { level: 3; depth: number }
-  | { level: 4; depth: number };
+  | { level: 4; depth: number }
+  | { level: 5; depth: number };
 
 export type BotPreset = {
   id: string;
@@ -97,10 +98,28 @@ export const BOT_PRESETS: BotPreset[] = [
     description: 'Pro — iterative deepening to depth 6 + move pruning + ladder ext.',
     config: { level: 4, depth: 6 },
   },
+  {
+    id: '5.4',
+    label: 'Level 5.4',
+    description: 'Master — Level 4 features + quiescence search + transposition table.',
+    config: { level: 5, depth: 4 },
+  },
+  {
+    id: '5.5',
+    label: 'Level 5.5',
+    description: 'Master — depth 5 + quiescence + TT.',
+    config: { level: 5, depth: 5 },
+  },
+  {
+    id: '5.6',
+    label: 'Level 5.6',
+    description: 'Master — depth 6 + quiescence + TT (slowest).',
+    config: { level: 5, depth: 6 },
+  },
 ];
 
 export const DEFAULT_PRESET_ID = '0';
-export const PUZZLE_REFUTER_PRESET_ID = '4.5';
+export const PUZZLE_REFUTER_PRESET_ID = '5.5';
 export const DEFAULT_TIME_MS = 1500;
 export const TIME_MIN_MS = 200;
 export const TIME_MAX_MS = 30000;
@@ -363,6 +382,116 @@ const TERMINAL = 100000;
 const MAX_PLIES = 40;
 const MAX_NODES = 200000;
 const MAX_EXTENSIONS_PER_BRANCH = 6;
+const QUIESCE_MAX_PLIES = 8;
+const TT_MAX = 80000;
+
+// ---------------------------------------------------------------------------
+// Transposition table — keyed by (board cells, side-to-play). Reset before
+// each top-level bot call so it can't grow unbounded across games.
+// ---------------------------------------------------------------------------
+type TTBound = 'exact' | 'lower' | 'upper';
+type TTEntry = { depth: number; score: number; bound: TTBound };
+
+const tt = new Map<string, TTEntry>();
+const ttClear = () => tt.clear();
+const ttKey = (state: GameState): string => {
+  let s = '';
+  for (let i = 0; i < state.board.cells.length; i++) {
+    const c = state.board.cells[i];
+    s += c === null ? '.' : c;
+  }
+  return s + state.toPlay;
+};
+const ttGet = (key: string): TTEntry | undefined => tt.get(key);
+const ttPut = (key: string, entry: TTEntry): void => {
+  if (tt.size >= TT_MAX) tt.clear();
+  tt.set(key, entry);
+};
+
+// ---------------------------------------------------------------------------
+// Quiescence search — at search leaves we keep recursing on forcing moves
+// (captures, atari-creating, save-from-atari) until the position quiets.
+// ---------------------------------------------------------------------------
+const quiesce = (
+  state: GameState,
+  rootColor: Color,
+  alpha: number,
+  beta: number,
+  qPlies: number,
+  ctx: SearchCtx,
+): number => {
+  ctx.nodes += 1;
+  if (ctx.aborted) return evaluate(state.board, rootColor);
+  if (ctx.nodes > MAX_NODES || ((ctx.nodes & 0xff) === 0 && performance.now() > ctx.deadline)) {
+    ctx.aborted = true;
+    return evaluate(state.board, rootColor);
+  }
+  if (qPlies >= QUIESCE_MAX_PLIES) return evaluate(state.board, rootColor);
+
+  const isMax = state.toPlay === rootColor;
+  const standPat = evaluate(state.board, rootColor);
+  if (isMax) {
+    if (standPat >= beta) return beta;
+    if (standPat > alpha) alpha = standPat;
+  } else {
+    if (standPat <= alpha) return alpha;
+    if (standPat < beta) beta = standPat;
+  }
+
+  // Build forcing-only move list: captures + atari-creating + (forced) save.
+  const opp = opposite(state.toPlay);
+  const forcing: { m: Point; score: number; capture: boolean }[] = [];
+  // 1. Captures and atari-creating.
+  for (const m of legalMoves(state, state.toPlay)) {
+    const r = tryPlace(state, m, state.toPlay);
+    if (!r.ok) continue;
+    if (r.result.captured.length > 0) {
+      const moverIsRoot = state.toPlay === rootColor;
+      return moverIsRoot ? TERMINAL - qPlies : -TERMINAL + qPlies;
+    }
+    let creates = false;
+    for (const n of neighbors(r.result.board, m)) {
+      if (r.result.board.cells[n.y * r.result.board.size + n.x] !== opp) continue;
+      const oppGrp = groupAt(r.result.board, n);
+      if (oppGrp && oppGrp.liberties.length === 1) { creates = true; break; }
+    }
+    if (creates) forcing.push({ m, score: 100, capture: false });
+  }
+  // 2. Side-to-play has its own group in atari → must include saving moves.
+  for (const rep of distinctGroups(state.board, state.toPlay)) {
+    const grp = groupAt(state.board, rep);
+    if (!grp || grp.liberties.length !== 1) continue;
+    const escape = grp.liberties[0]!;
+    if (forcing.some((f) => f.m.x === escape.x && f.m.y === escape.y)) continue;
+    const r = tryPlace(state, escape, state.toPlay);
+    if (!r.ok) continue;
+    const placed = groupAt(r.result.board, escape);
+    if (placed && placed.liberties.length >= 2) forcing.push({ m: escape, score: 80, capture: false });
+  }
+
+  if (forcing.length === 0) return isMax ? alpha : beta;
+  forcing.sort((a, b) => b.score - a.score);
+
+  for (const { m } of forcing) {
+    const r = applyMove(state, m);
+    if (!r) continue;
+    let score: number;
+    if (r.captured.length > 0) {
+      const moverIsRoot = state.toPlay === rootColor;
+      score = moverIsRoot ? TERMINAL - qPlies : -TERMINAL + qPlies;
+    } else {
+      score = quiesce(r.state, rootColor, alpha, beta, qPlies + 1, ctx);
+    }
+    if (isMax) {
+      if (score > alpha) alpha = score;
+    } else {
+      if (score < beta) beta = score;
+    }
+    if (alpha >= beta) break;
+    if (ctx.aborted) break;
+  }
+  return isMax ? alpha : beta;
+};
 
 // True iff `move` was just played by `mover` and turned a previously-non-atari
 // adjacent opp group into atari. (Stale ataris elsewhere on the board don't
@@ -400,6 +529,8 @@ type SearchCtx = {
   aborted: boolean;
   deadline: number;
   prune: boolean;
+  useTT: boolean;
+  useQuiescence: boolean;
 };
 
 // Alpha-beta minimax. If `extendLadders` is true, a move that just creates a
@@ -424,7 +555,24 @@ const search = (
   }
   const isMax = state.toPlay === rootColor;
   if (plies >= MAX_PLIES) return evaluate(state.board, rootColor);
-  if (depth <= 0) return evaluate(state.board, rootColor);
+  if (depth <= 0) {
+    if (ctx.useQuiescence) return quiesce(state, rootColor, alpha, beta, 0, ctx);
+    return evaluate(state.board, rootColor);
+  }
+
+  const alphaOrig = alpha;
+  const betaOrig = beta;
+  let key = '';
+  if (ctx.useTT) {
+    key = ttKey(state);
+    const cached = ttGet(key);
+    if (cached && cached.depth >= depth) {
+      if (cached.bound === 'exact') return cached.score;
+      if (cached.bound === 'lower' && cached.score > alpha) alpha = cached.score;
+      else if (cached.bound === 'upper' && cached.score < beta) beta = cached.score;
+      if (alpha >= beta) return cached.score;
+    }
+  }
 
   const moves = orderMoves(state, state.toPlay, ctx.prune);
   if (moves.length === 0) return evaluate(state.board, rootColor);
@@ -473,6 +621,13 @@ const search = (
     }
     if (alpha >= beta) break;
     if (ctx.aborted) break;
+  }
+  if (ctx.useTT && key && !ctx.aborted) {
+    let bound: TTBound;
+    if (best <= alphaOrig) bound = 'upper';
+    else if (best >= betaOrig) bound = 'lower';
+    else bound = 'exact';
+    ttPut(key, { depth, score: best, bound });
   }
   return best;
 };
@@ -549,17 +704,23 @@ const chooseMinimax = (
   prune: boolean,
   iterative: boolean,
   timeMs: number,
+  useTT: boolean = false,
+  useQuiescence: boolean = false,
 ): Point | null => {
   for (const m of orderMoves(state, color, prune)) {
     const r = tryPlace(state, m, color);
     if (r.ok && r.result.captured.length > 0) return m;
   }
 
+  if (useTT) ttClear();
+
   const ctx: SearchCtx = {
     nodes: 0,
     aborted: false,
     deadline: performance.now() + timeMs,
     prune,
+    useTT,
+    useQuiescence,
   };
 
   if (!iterative) {
@@ -601,6 +762,8 @@ export const chooseBotMove = (
       return chooseMinimax(state, color, config.depth, true, false, false, timeMs);
     case 4:
       return chooseMinimax(state, color, config.depth, true, true, true, timeMs);
+    case 5:
+      return chooseMinimax(state, color, config.depth, true, true, true, timeMs, true, true);
   }
 };
 
