@@ -81,7 +81,7 @@ export const BOT_PRESETS: BotPreset[] = [
 ];
 
 export const DEFAULT_PRESET_ID = '0';
-export const PUZZLE_REFUTER_PRESET_ID = '3.3';
+export const PUZZLE_REFUTER_PRESET_ID = '2.3';
 
 export const findPreset = (id: string): BotPreset =>
   BOT_PRESETS.find((p) => p.id === id) ?? BOT_PRESETS[0]!;
@@ -120,13 +120,6 @@ const newLibCount = (state: GameState, point: Point, color: Color): number => {
   return grp ? grp.liberties.length : 0;
 };
 
-const anyGroupInAtari = (board: Board, color: Color): boolean => {
-  for (const rep of distinctGroups(board, color)) {
-    const grp = groupAt(board, rep);
-    if (grp && grp.liberties.length === 1) return true;
-  }
-  return false;
-};
 
 // ---------------------------------------------------------------------------
 // Level 0: greedy cascade.
@@ -301,11 +294,47 @@ const orderMoves = (state: GameState, color: Color): Point[] => {
 };
 
 const TERMINAL = 100000;
-const MAX_PLIES = 60;
+const MAX_PLIES = 40;
+const MAX_NODES = 50000;
+const MAX_TIME_MS = 1500;
+const MAX_EXTENSIONS_PER_BRANCH = 6;
 
-// Alpha-beta minimax. If `extendLadders` is true, a move that leaves the next
-// player to move in atari (i.e., a forcing move) does not consume search depth,
-// capped by an absolute recursion limit.
+// True iff `move` was just played by `mover` and turned a previously-non-atari
+// adjacent opp group into atari. (Stale ataris elsewhere on the board don't
+// count — those would otherwise re-trigger ladder extension forever.)
+const moveCreatesNewAtari = (
+  before: Board,
+  after: Board,
+  move: Point,
+  mover: Color,
+): boolean => {
+  const opp = opposite(mover);
+  for (const n of neighbors(after, move)) {
+    if (after.cells[n.y * after.size + n.x] !== opp) continue;
+    const grpAfter = groupAt(after, n);
+    if (!grpAfter || grpAfter.liberties.length !== 1) continue;
+    // Find any stone of this group that already existed before the move and
+    // ask whether the group it belonged to had ≥2 liberties then.
+    let preLibs = -1;
+    for (const s of grpAfter.stones) {
+      if (before.cells[s.y * before.size + s.x] === opp) {
+        const grpBefore = groupAt(before, s);
+        if (grpBefore) {
+          preLibs = grpBefore.liberties.length;
+          break;
+        }
+      }
+    }
+    if (preLibs >= 2) return true;
+  }
+  return false;
+};
+
+type SearchCtx = { nodes: number; aborted: boolean; deadline: number };
+
+// Alpha-beta minimax. If `extendLadders` is true, a move that just creates a
+// fresh atari on an adjacent opp group does not consume search depth, capped
+// by `extensionsLeft` per branch.
 const search = (
   state: GameState,
   rootColor: Color,
@@ -314,7 +343,15 @@ const search = (
   beta: number,
   extendLadders: boolean,
   plies: number,
+  extensionsLeft: number,
+  ctx: SearchCtx,
 ): number => {
+  ctx.nodes += 1;
+  if (ctx.aborted) return evaluate(state.board, rootColor);
+  if (ctx.nodes > MAX_NODES || (ctx.nodes & 0xff) === 0 && performance.now() > ctx.deadline) {
+    ctx.aborted = true;
+    return evaluate(state.board, rootColor);
+  }
   const isMax = state.toPlay === rootColor;
   if (plies >= MAX_PLIES) return evaluate(state.board, rootColor);
   if (depth <= 0) return evaluate(state.board, rootColor);
@@ -323,22 +360,38 @@ const search = (
   if (moves.length === 0) return evaluate(state.board, rootColor);
 
   let best = isMax ? -Infinity : Infinity;
+  const before = state.board;
+  const mover = state.toPlay;
   for (const m of moves) {
     const r = applyMove(state, m);
     if (!r) continue;
 
     let score: number;
     if (r.captured.length > 0) {
-      const moverIsRoot = state.toPlay === rootColor;
+      const moverIsRoot = mover === rootColor;
       score = moverIsRoot ? TERMINAL - plies : -TERMINAL + plies;
     } else {
       let nextDepth = depth - 1;
-      if (extendLadders && anyGroupInAtari(r.state.board, r.state.toPlay)) {
-        // Move puts opponent in atari; their reply is forced or they lose.
-        // Don't decrement depth on this branch.
+      let nextExtensions = extensionsLeft;
+      if (
+        extendLadders &&
+        nextExtensions > 0 &&
+        moveCreatesNewAtari(before, r.state.board, m, mover)
+      ) {
         nextDepth = depth;
+        nextExtensions -= 1;
       }
-      score = search(r.state, rootColor, nextDepth, alpha, beta, extendLadders, plies + 1);
+      score = search(
+        r.state,
+        rootColor,
+        nextDepth,
+        alpha,
+        beta,
+        extendLadders,
+        plies + 1,
+        nextExtensions,
+        ctx,
+      );
     }
 
     if (isMax) {
@@ -349,6 +402,7 @@ const search = (
       if (best < beta) beta = best;
     }
     if (alpha >= beta) break;
+    if (ctx.aborted) break;
   }
   return best;
 };
@@ -364,10 +418,17 @@ const chooseMinimax = (
     if (r.ok && r.result.captured.length > 0) return m;
   }
 
+  const ctx: SearchCtx = {
+    nodes: 0,
+    aborted: false,
+    deadline: performance.now() + MAX_TIME_MS,
+  };
   let bestScore = -Infinity;
   let bestMove: Point | null = null;
   let alpha = -Infinity;
   const beta = Infinity;
+  const before = state.board;
+  const mover = color;
   for (const m of orderMoves(state, color)) {
     const r = applyMove(state, m);
     if (!r) continue;
@@ -376,16 +437,32 @@ const chooseMinimax = (
       score = TERMINAL - 1;
     } else {
       let nextDepth = depth - 1;
-      if (extendLadders && anyGroupInAtari(r.state.board, r.state.toPlay)) {
+      let nextExtensions = MAX_EXTENSIONS_PER_BRANCH;
+      if (
+        extendLadders &&
+        moveCreatesNewAtari(before, r.state.board, m, mover)
+      ) {
         nextDepth = depth;
+        nextExtensions -= 1;
       }
-      score = search(r.state, color, nextDepth, alpha, beta, extendLadders, 1);
+      score = search(
+        r.state,
+        color,
+        nextDepth,
+        alpha,
+        beta,
+        extendLadders,
+        1,
+        nextExtensions,
+        ctx,
+      );
     }
     if (score > bestScore) {
       bestScore = score;
       bestMove = m;
     }
     if (bestScore > alpha) alpha = bestScore;
+    if (ctx.aborted) break;
   }
   return bestMove;
 };

@@ -1,7 +1,7 @@
 import { createGameSession } from '../game/session';
 import { BOT_PRESETS, findPreset } from '../game/bot';
 import { getBotPreset, recordGame, setBotPreset } from '../storage/progress';
-import type { Color } from '../engine/types';
+import type { Color, Point } from '../engine/types';
 import { createBoardView, type BoardMarker } from './boardView';
 
 export const renderGame = (): HTMLElement => {
@@ -82,18 +82,31 @@ export const renderGame = (): HTMLElement => {
 
   let session = createGameSession(9, 'B', findPreset(getBotPreset()).config);
   let recorded = false;
+  let lastHuman: Point | null = null;
+  let botBusy = false;
 
   const view = createBoardView({
     onClick: (p) => {
+      if (botBusy) return;
       if (session.status.kind !== 'in-progress') return;
       if (session.state.toPlay !== session.human) return;
       const r = session.playHuman(p);
       if (!r.ok) return;
-      const markers: BoardMarker[] = [];
-      if (r.humanMove) markers.push({ kind: 'last-move', point: r.humanMove });
-      if (r.botMove) markers.push({ kind: 'last-move', point: r.botMove });
-      view.render(session.state.board, markers);
+      lastHuman = r.humanMove;
+      view.render(session.state.board, [{ kind: 'last-move', point: r.humanMove }]);
       updateStatus();
+      if (session.status.kind === 'in-progress' && session.isBotTurn()) {
+        botBusy = true;
+        setTimeout(() => {
+          const bot = session.playBotMove();
+          const markers: BoardMarker[] = [];
+          if (lastHuman) markers.push({ kind: 'last-move', point: lastHuman });
+          if (bot) markers.push({ kind: 'last-move', point: bot.move });
+          view.render(session.state.board, markers);
+          botBusy = false;
+          updateStatus();
+        }, 0);
+      }
     },
     showCoordinates: true,
   });
@@ -108,6 +121,9 @@ export const renderGame = (): HTMLElement => {
         recordGame(won);
         recorded = true;
       }
+    } else if (botBusy) {
+      status.className = 'feedback info';
+      status.textContent = 'Bot is thinking...';
     } else {
       const yourTurn = session.state.toPlay === session.human;
       status.className = 'feedback info';
@@ -118,10 +134,22 @@ export const renderGame = (): HTMLElement => {
   const start = (color: Color, presetId: string) => {
     session = createGameSession(9, color, findPreset(presetId).config);
     recorded = false;
-    const markers: BoardMarker[] = [];
-    if (session.lastMove) markers.push({ kind: 'last-move', point: session.lastMove });
-    view.render(session.state.board, markers);
+    lastHuman = null;
+    botBusy = false;
+    view.render(session.state.board, []);
     updateStatus();
+    // If the bot plays first (human is white), kick it off.
+    if (session.isBotTurn()) {
+      botBusy = true;
+      setTimeout(() => {
+        const bot = session.playBotMove();
+        const markers: BoardMarker[] = [];
+        if (bot) markers.push({ kind: 'last-move', point: bot.move });
+        view.render(session.state.board, markers);
+        botBusy = false;
+        updateStatus();
+      }, 0);
+    }
   };
   start('B', getBotPreset());
 

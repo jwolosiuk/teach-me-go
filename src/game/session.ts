@@ -7,14 +7,22 @@ export type GameStatus =
   | { kind: 'in-progress' }
   | { kind: 'won'; winner: Color; capturedAt: Point };
 
+export type HumanResult =
+  | { ok: false }
+  | { ok: true; humanMove: Point; captured: boolean };
+
+export type BotResult = { move: Point; captured: boolean } | null;
+
 export type GameSession = {
   state: GameState;
   status: GameStatus;
   human: Color;
   bot: Color;
   lastMove: Point | null;
+  isBotTurn: () => boolean;
   reset: () => void;
-  playHuman: (p: Point) => { ok: false } | { ok: true; humanMove: Point; botMove: Point | null };
+  playHuman: (p: Point) => HumanResult;
+  playBotMove: () => BotResult;
 };
 
 export const createGameSession = (
@@ -30,13 +38,6 @@ export const createGameSession = (
     state = initialState(createBoard(size), 'B');
     status = { kind: 'in-progress' };
     lastMove = null;
-    if (human === 'W') {
-      const r = playBot(state, botConfig);
-      if (r) {
-        state = r.state;
-        lastMove = r.move;
-      }
-    }
   };
 
   const session: GameSession = {
@@ -51,6 +52,9 @@ export const createGameSession = (
     get lastMove() {
       return lastMove;
     },
+    isBotTurn() {
+      return status.kind === 'in-progress' && state.toPlay !== human;
+    },
     reset() {
       reset();
     },
@@ -61,23 +65,23 @@ export const createGameSession = (
       if (!r) return { ok: false };
       state = r.state;
       lastMove = p;
-      if (r.captured.length > 0) {
-        status = { kind: 'won', winner: human, capturedAt: p };
-        return { ok: true, humanMove: p, botMove: null };
-      }
-      const bot = playBot(state, botConfig);
-      if (!bot) return { ok: true, humanMove: p, botMove: null };
-      const botCaptured = (() => {
-        const before = state.board.cells.filter((c) => c === human).length;
-        state = bot.state;
-        lastMove = bot.move;
-        const after = state.board.cells.filter((c) => c === human).length;
-        return before > after;
-      })();
-      if (botCaptured) {
-        status = { kind: 'won', winner: session.bot, capturedAt: bot.move };
-      }
-      return { ok: true, humanMove: p, botMove: bot.move };
+      const captured = r.captured.length > 0;
+      if (captured) status = { kind: 'won', winner: human, capturedAt: p };
+      return { ok: true, humanMove: p, captured };
+    },
+    playBotMove() {
+      if (status.kind !== 'in-progress') return null;
+      if (state.toPlay === human) return null;
+      const r = playBot(state, botConfig);
+      if (!r) return null;
+      const opp = human;
+      const before = state.board.cells.filter((c) => c === opp).length;
+      state = r.state;
+      lastMove = r.move;
+      const after = state.board.cells.filter((c) => c === opp).length;
+      const captured = before > after;
+      if (captured) status = { kind: 'won', winner: session.bot, capturedAt: r.move };
+      return { move: r.move, captured };
     },
   };
   reset();

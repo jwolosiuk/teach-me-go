@@ -138,6 +138,33 @@ export const renderPuzzle = (puzzleId: string): HTMLElement => {
     return { state: r.state, move, capturedUser: r.captured.length > 0 };
   };
 
+  let botBusy = false;
+
+  const scheduleBotReply = () => {
+    if (!freeState || frozen || botBusy) return;
+    botBusy = true;
+    setTimeout(() => {
+      if (!freeState) {
+        botBusy = false;
+        return;
+      }
+      const reply = playBotReply(freeState);
+      freeState = reply.state;
+      if (reply.move) lastMarker.push({ kind: 'last-move', point: reply.move });
+      view.render(freeState.board, lastMarker);
+      if (reply.capturedUser) {
+        setFeedback('bad', 'Bot captured your stones. Reset to retry the puzzle.');
+        frozen = true;
+      } else if (mode === 'free-play') {
+        setFeedback(
+          'bad',
+          'Free play. Keep playing — or hit Reset to retry the puzzle.',
+        );
+      }
+      botBusy = false;
+    }, 0);
+  };
+
   const enterFreePlay = (wrongMove: Point) => {
     const r = applyMove(session.state, wrongMove);
     if (!r) {
@@ -149,9 +176,6 @@ export const renderPuzzle = (puzzleId: string): HTMLElement => {
     lastMarker = [{ kind: 'last-move', point: wrongMove }];
 
     if (r.captured.length > 0) {
-      // The wrong move actually captured something — surprising, but possible
-      // if the puzzle had multiple atari'd opp groups and the user picked the
-      // "wrong" one. Treat it as a win in free-play.
       view.render(freeState.board, lastMarker);
       setFeedback(
         'good',
@@ -161,27 +185,13 @@ export const renderPuzzle = (puzzleId: string): HTMLElement => {
       return;
     }
 
-    const reply = playBotReply(freeState);
-    freeState = reply.state;
-    if (reply.move) lastMarker.push({ kind: 'last-move', point: reply.move });
     view.render(freeState.board, lastMarker);
-
-    if (reply.capturedUser) {
-      setFeedback(
-        'bad',
-        'Not the solution — and the bot captured. Reset to retry the puzzle.',
-      );
-      frozen = true;
-    } else {
-      setFeedback(
-        'bad',
-        'Not the solution. Continue playing against the bot (Level 3.3) to see how it punishes that move. Reset to retry.',
-      );
-    }
+    setFeedback('bad', 'Not the solution. Bot (Level 2.3) is thinking...');
+    scheduleBotReply();
   };
 
   const handleFreePlayClick = (p: Point) => {
-    if (!freeState || frozen) return;
+    if (!freeState || frozen || botBusy) return;
     if (freeState.toPlay !== userColor) return;
     const r = applyMove(freeState, p);
     if (!r) return;
@@ -195,15 +205,9 @@ export const renderPuzzle = (puzzleId: string): HTMLElement => {
       return;
     }
 
-    const reply = playBotReply(freeState);
-    freeState = reply.state;
-    if (reply.move) lastMarker.push({ kind: 'last-move', point: reply.move });
     view.render(freeState.board, lastMarker);
-
-    if (reply.capturedUser) {
-      setFeedback('bad', 'Bot captured your stones. Reset to retry the puzzle.');
-      frozen = true;
-    }
+    setFeedback('info', 'Bot is thinking...');
+    scheduleBotReply();
   };
 
   const view = createBoardView({
@@ -237,6 +241,7 @@ export const renderPuzzle = (puzzleId: string): HTMLElement => {
   const start = () => {
     solved = false;
     frozen = false;
+    botBusy = false;
     mode = 'solving';
     freeState = null;
     session = startSession(puzzle);

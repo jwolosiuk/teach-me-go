@@ -8,10 +8,11 @@ describe('Atari Go session', () => {
     expect(s.status.kind).toBe('in-progress');
   });
 
-  it('plays a bot reply automatically when human is white', () => {
+  it('reports bot turn when human is white', () => {
     const s = createGameSession(9, 'W');
-    // After construction the bot (black) should already have played.
-    expect(s.lastMove).not.toBeNull();
+    expect(s.isBotTurn()).toBe(true);
+    const bot = s.playBotMove();
+    expect(bot).not.toBeNull();
     expect(s.state.toPlay).toBe('W');
   });
 
@@ -19,7 +20,6 @@ describe('Atari Go session', () => {
     const s = createGameSession(9, 'B');
     let plies = 0;
     while (s.status.kind === 'in-progress' && plies < 200) {
-      // The "human" plays a deterministic legal move: scan for first empty.
       let played = false;
       for (let y = 0; y < 9 && !played; y++) {
         for (let x = 0; x < 9 && !played; x++) {
@@ -30,6 +30,7 @@ describe('Atari Go session', () => {
         }
       }
       if (!played) break;
+      if (s.isBotTurn()) s.playBotMove();
       plies += 1;
     }
     expect(plies).toBeLessThan(200);
