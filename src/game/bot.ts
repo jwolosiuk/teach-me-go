@@ -1,8 +1,9 @@
 import { groupAt, neighbors, type Board } from '../engine/board';
 import { applyMove, legalMoves, tryPlace, type GameState } from '../engine/rules';
 import { opposite, type Color, type Point } from '../engine/types';
+import { runMcts } from './mcts';
 
-export type BotLevel = 0 | 1 | 2 | 3 | 4 | 5;
+export type BotLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 export type BotConfig =
   | { level: 0 }
@@ -10,7 +11,8 @@ export type BotConfig =
   | { level: 2; depth: number }
   | { level: 3; depth: number }
   | { level: 4; depth: number }
-  | { level: 5; depth: number };
+  | { level: 5; depth: number }
+  | { level: 6 };
 
 export type BotPreset = {
   id: string;
@@ -115,6 +117,12 @@ export const BOT_PRESETS: BotPreset[] = [
     label: 'Level 5.6',
     description: 'Master — depth 6 + quiescence + TT (slowest).',
     config: { level: 5, depth: 6 },
+  },
+  {
+    id: '6',
+    label: 'Level 6 — MCTS',
+    description: 'Monte Carlo Tree Search (UCT). Scales with the time budget — give it more time for stronger play.',
+    config: { level: 6 },
   },
 ];
 
@@ -764,6 +772,8 @@ export const chooseBotMove = (
       return chooseMinimax(state, color, config.depth, true, true, true, timeMs);
     case 5:
       return chooseMinimax(state, color, config.depth, true, true, true, timeMs, true, true);
+    case 6:
+      return runMcts(state, color, timeMs).move;
   }
 };
 
