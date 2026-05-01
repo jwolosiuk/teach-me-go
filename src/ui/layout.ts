@@ -1,5 +1,22 @@
 export type Route = '/' | '/puzzles' | '/play';
 
+const REPO_URL = 'https://github.com/jwolosiuk/teach-me-go';
+
+const formatBangkok = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  return `${fmt.format(d)} ICT`;
+};
+
 export const renderShell = (root: HTMLElement, currentRoute: Route, content: HTMLElement) => {
   root.innerHTML = '';
 
@@ -26,6 +43,17 @@ export const renderShell = (root: HTMLElement, currentRoute: Route, content: HTM
   const main = document.createElement('main');
   main.appendChild(content);
 
+  const footer = document.createElement('footer');
+  const hashLink = document.createElement('a');
+  hashLink.href = `${REPO_URL}/commit/${__COMMIT_HASH__}`;
+  hashLink.target = '_blank';
+  hashLink.rel = 'noopener noreferrer';
+  hashLink.textContent = __COMMIT_HASH__;
+  footer.appendChild(document.createTextNode('Build '));
+  footer.appendChild(hashLink);
+  footer.appendChild(document.createTextNode(` · ${formatBangkok(__COMMIT_TIME__)}`));
+
   root.appendChild(header);
   root.appendChild(main);
+  root.appendChild(footer);
 };

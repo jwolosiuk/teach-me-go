@@ -55,6 +55,17 @@ main {
   margin: 0 auto;
 }
 
+footer {
+  padding: 12px 24px;
+  border-top: 1px solid #2a323d;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+footer a { color: var(--muted); text-decoration: underline; font-family: ui-monospace, SFMono-Regular, monospace; }
+footer a:hover { color: var(--text); }
+
 .layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
