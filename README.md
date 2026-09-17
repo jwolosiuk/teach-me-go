@@ -3,7 +3,7 @@
 Learn the game of Go from zero through 48 short puzzles, then play against a bot.
 Runs entirely in the browser: no accounts, no backend.
 
-**Play:** https://go.oraculum-aeternum.duckdns.org
+**Play:** https://teach-me-go.oraculum-aeternum.duckdns.org
 
 ## What is inside
 
